@@ -21,7 +21,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef MO_UIBASE_UTILITY_INCLUDED
 #define MO_UIBASE_UTILITY_INCLUDED
 
-#include "dllimport.h"
 #include <vector>
 #include <set>
 #include <algorithm>
@@ -33,6 +32,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <QVariant>
 #include <Windows.h>
 #include <ShlObj.h>
+
+#include "dllimport.h"
+#include "exceptions.h"
 
 
 namespace MOBase {
@@ -267,6 +269,15 @@ namespace shell
   // across volumes
   //
   QDLLEXPORT Result Rename(const QFileInfo& src, const QFileInfo& dest);
+  QDLLEXPORT Result Rename(const QFileInfo& src, const QFileInfo& dest, bool copyAllowed);
+
+  QDLLEXPORT Result CreateDirectories(const QDir& dir);
+  QDLLEXPORT Result DeleteDirectoryRecursive(const QDir& dir);
+
+  // sets the command used for Open() with a QUrl, %1 is replaced by the URL;
+  // pass an empty string to use the system handler
+  //
+  QDLLEXPORT void SetUrlHandler(const QString& cmd);
 }
 
 /**
@@ -323,52 +334,17 @@ QString SetJoin(const std::set<T> &value, const QString &separator, size_t maxim
   return result;
 }
 
-
-/**
- * @brief exception class that takes a QString as the parameter
- **/
-
-#pragma warning(push)
-#pragma warning(disable: 4275)  // non-dll interface
-
-class QDLLEXPORT MyException : public std::exception {
-public:
-  /**
-   * @brief constructor
-   *
-   * @param text exception text
-   **/
-  MyException(const QString &text);
-
-  virtual const char* what() const throw()
-          { return m_Message.constData(); }
-private:
-  QByteArray m_Message;
-};
-
-#pragma warning(pop)
-
-
-/**
- * @brief exception thrown in case of incompatibilities, i.e. between plugins
- */
-class QDLLEXPORT IncompatibilityException : public MyException {
-public:
-  IncompatibilityException(const QString &text) : MyException(text) {}
-};
-
 template <typename T>
 QList<T> ConvertList(const QVariantList &variants)
 {
   QList<T> result;
   for (const QVariant& var : variants) {
     if (!var.canConvert<T>()) {
-      throw MyException("invalid variant type");
+      throw Exception("invalid variant type");
     }
     result.append(var.value<T>());
   }
 }
-
 /**
  * @brief convert QString to std::wstring (utf-16 encoding)
  **/
@@ -398,6 +374,34 @@ QDLLEXPORT QString ToQString(const std::wstring &source);
  * @return string representation of the time object
  **/
 QDLLEXPORT QString ToString(const SYSTEMTIME &time);
+
+
+// three-way compare for natural sorting (case insensitive default, 10 comes
+// after 2)
+//
+QDLLEXPORT int naturalCompare(
+  const QString& a, const QString& b,
+  Qt::CaseSensitivity cs=Qt::CaseInsensitive);
+
+
+// calls naturalCompare()
+//
+class QDLLEXPORT NaturalSort
+{
+public:
+  NaturalSort(Qt::CaseSensitivity cs=Qt::CaseInsensitive)
+    : m_cs(cs)
+  {
+  }
+
+  bool operator()(const QString& a, const QString& b)
+  {
+    return (naturalCompare(a, b, m_cs) < 0);
+  }
+
+private:
+  Qt::CaseSensitivity m_cs;
+};
 
 /**
  * throws on failure
@@ -548,12 +552,31 @@ private:
 };
 
 
+// remembers the time in the constructor, logs the time elapsed in the
+// destructor
+//
 class QDLLEXPORT TimeThis
 {
 public:
-  TimeThis(QString what={});
+  // calls start()
+  //
+  TimeThis(const QString& what={});
+
+  // calls stop()
+  //
   ~TimeThis();
 
+  TimeThis(const TimeThis&) = delete;
+  TimeThis& operator=(const TimeThis&) = delete;
+
+  // remembers the current time and the given string; if there is currently
+  // a timing active, calls stop() to log it first
+  //
+  void start(const QString& what={});
+
+  // logs the time elapsed since start() in the form of "timing: what X ms";
+  // no-op if start() wasn't called
+  //
   void stop();
 
 private:

@@ -27,6 +27,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <QString>
 
+#include "iprofile.h"
+#include "imodinterface.h"
+
 namespace MOBase {
 
 /**
@@ -66,10 +69,51 @@ public:
   virtual QString displayName(const QString &internalName) const = 0;
 
   /**
-   * @brief retrieve a list of all installed mod names
-   * @return list of mods (internal names)
+   * @brief Retrieve a list of all installed mod names.
+   *
+   * @return list of mods (internal names).
    */
   virtual QStringList allMods() const = 0;
+
+  /**
+   * @brief Retrieve the list of installed mod names, sorted by current profile priority.
+   *
+   * @param profile The profile to use for the priority. If nullptr, the current
+   *     profile is used.
+   *
+   * @return list of mods (internal names), sorted by priority.
+   */
+  virtual QStringList allModsByProfilePriority(MOBase::IProfile *profile = nullptr) const = 0;
+
+  /**
+   * @brief Retrieve the mod with the given name.
+   *
+   * @param name Name of the mod to retrieve.
+   *
+   * @return the mod with the given name, or a null pointer if there is no mod with this name.
+   */
+  virtual IModInterface* getMod(const QString& name) const = 0;
+
+  /**
+   * @brief Remove a mod (from disc and from the ui).
+   *
+   * @param mod The mod to remove.
+   *
+   * @return true on success, false on error.
+   */
+  virtual bool removeMod(MOBase::IModInterface *mod) = 0;
+
+  /**
+   * @brief Rename the given mod.
+   *
+   * This invalidate the mod so you should use the returned value afterwards.
+   *
+   * @param mod The mod to rename.
+   *
+   * @return the new mod (after renaming) on success, a null pointer on error.
+   */
+  virtual MOBase::IModInterface* renameMod(MOBase::IModInterface *mod, const QString& name) = 0;
+
 
   /**
    * @brief retrieve the state of a mod
@@ -80,12 +124,12 @@ public:
 
   /**
    * @brief enable or disable a mod
-   * 
+   *
    * @param name name of the mod
    * @param active if true the mod is enabled, otherwise it's disabled
-   * 
+   *
    * @return true on success, false if the mod name is not valid
-   * 
+   *
    * @note calling this will cause MO to re-evaluate its virtual file system so this is fairly
    *       expensive
    */
@@ -93,12 +137,12 @@ public:
 
   /**
    * @brief enable or disable a list of mod
-   * 
+   *
    * @param names names of the mod
    * @param active if true mods are enabled, otherwise they are disabled
-   * 
+   *
    * @return the number of mods successfully enabled or disabled
-   * 
+   *
    * @note calling this will cause MO to re-evaluate its virtual file system so this is fairly
    *       expensive
    */
@@ -121,6 +165,26 @@ public:
    *       all mods with higher priority than the moved mod decrease in priority by one.
    */
   virtual bool setPriority(const QString &name, int newPriority) = 0;
+
+  /**
+   * @brief Add a new callback to be called when a new mod is installed.
+   *
+   * Parameters of the callback:
+   *   - The installed mod.
+   *
+   * @param func Function to called when a mod has been installed.
+   */
+  virtual bool onModInstalled(const std::function<void(IModInterface *)>& func) = 0;
+
+  /**
+   * @brief Add a new callback to be called when a mod is removed.
+   *
+   * Parameters of the callback:
+   *   - The name of the removed mod.
+   *
+   * @param func Function to called when a mod has been removed.
+   */
+  virtual bool onModRemoved(const std::function<void(QString const&)>& func) = 0;
 
   /**
    * @brief Installs a handler for the event that the state of mods changed (enabled/disabled, endorsed, ...).

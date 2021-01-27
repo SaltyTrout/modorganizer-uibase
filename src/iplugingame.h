@@ -3,6 +3,7 @@
 
 
 #include "iplugin.h"
+#include "isavegame.h"
 #include "executableinfo.h"
 
 class QIcon;
@@ -14,16 +15,30 @@ class QStringList;
 #include <cstdint>
 #include <typeindex>
 #include <unordered_map>
+#include <memory>
 #include <vector>
 
 namespace MOBase {
 
-
-class IPluginGame : public QObject, public IPlugin {
+// Game plugins can be loaded without an IOrganizer being available, in which
+// case detectGame() is called, but not init().
+//
+// These functions may be called before init() (after detectGame()):
+//   - gameName()
+//   - isInstalled()
+//   - gameIcon()
+//   - gameDirectory()
+//   - dataDirectory()
+//   - gameVariants()
+//   - looksValid()
+//   - see IPlugin::init() for more
+//
+//
+class IPluginGame : public QObject, public IPlugin
+{
   Q_INTERFACES(IPlugin)
 
 public:
-
   enum class LoadOrderMechanism {
     FileTime,
     PluginsTxt
@@ -42,11 +57,17 @@ public:
     SAVEGAMES       = 0x04,
     PREFER_DEFAULTS = 0x08
   };
+
   Q_DECLARE_FLAGS(ProfileSettings, ProfileSetting)
 
 public:
 
+  // Game plugin should not have requirements:
+  std::vector<std::shared_ptr<const IPluginRequirement>> requirements() const final override { return {}; }
+
   /**
+   * this function may be called before init()
+   *
    * @return name of the game
    */
   virtual QString gameName() const = 0;
@@ -72,6 +93,22 @@ public:
   }
 
   /**
+   * @brief Detect the game.
+   *
+   * This method is the first method called for game plugins (before init()). The
+   * following methods can be called after detectGame() but before init():
+   * - gameName()
+   * - isInstalled()
+   * - gameIcon()
+   * - gameDirectory()
+   * - dataDirectory()
+   * - gameVariants()
+   * - looksValid()
+   * - see IPlugin::init() for more
+   */
+  virtual void detectGame() = 0;
+
+  /**
    * @brief initialize a profile for this game
    * @param directory the directory where the profile is to be initialized
    * @param settings parameters for how the profile should be initialized
@@ -82,31 +119,41 @@ public:
   virtual void initializeProfile(const QDir &directory, ProfileSettings settings) const = 0;
 
   /**
+   * @brief List save games in the specified folder.
+   *
+   * @param folder The folder containing the saves.
+   *
+   * @return the list of saves in the specified folder.
+   */
+  /**
    * @return file extension of save games for this game
    */
-  virtual QString savegameExtension() const = 0;
+  virtual std::vector<std::shared_ptr<const ISaveGame>> listSaves(QDir folder) const = 0;
 
   /**
-   * @return file extension of script extender save game files for this game
-   */
-  virtual QString savegameSEExtension() const = 0;
-
-  /**
+   * this function may be called before init()
+   *
    * @return true if this game has been discovered as installed, false otherwise
    */
   virtual bool isInstalled() const = 0;
 
   /**
+   * this function may be called before init()
+   *
    * @return an icon for this game
    */
   virtual QIcon gameIcon() const = 0;
 
   /**
+   * this function may be called before init()
+   *
    * @return directory to the game installation
    */
   virtual QDir gameDirectory() const = 0;
 
   /**
+   * this function may be called before init()
+   *
    * @return directory where the game expects to find its data files
    */
   virtual QDir dataDirectory() const = 0;
@@ -152,6 +199,8 @@ public:
   virtual QStringList primaryPlugins() const = 0;
 
   /**
+   * this function may be called before init()
+   *
    * @return list of game variants
    * @note if there are multiple variants of a game (and the variants make a difference to the
    *       plugin) like a regular one and a GOTY-edition the plugin can return a list of them and
@@ -247,6 +296,8 @@ public:
   virtual int nexusGameID() const = 0;
 
   /**
+   * this function may be called before init()
+   *
    * @brief See if the supplied directory looks like a valid game
    */
   virtual bool looksValid(QDir const &) const = 0;

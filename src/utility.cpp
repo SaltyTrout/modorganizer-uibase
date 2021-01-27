@@ -33,6 +33,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <QTextCodec>
 #include <QtDebug>
 #include <QUuid>
+#include <QCollator>
 #include <QtWinExtras/QtWin>
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -41,14 +42,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #define FO_RECYCLE 0x1003
 
 
-namespace MOBase {
-
-
-MyException::MyException(const QString &text)
-  : std::exception(), m_Message(text.toUtf8())
+namespace MOBase
 {
-}
-
 
 bool removeDir(const QString &dirName)
 {
@@ -147,7 +142,9 @@ static DWORD TranslateError(int error)
 }
 
 
-static bool shellOp(const QStringList &sourceNames, const QStringList &destinationNames, QWidget *dialog, UINT operation, bool yesToAll)
+static bool shellOp(
+  const QStringList &sourceNames, const QStringList &destinationNames,
+  QWidget *dialog, UINT operation, bool yesToAll, bool silent=false)
 {
   std::vector<wchar_t> fromBuffer;
   std::vector<wchar_t> toBuffer;
@@ -210,6 +207,10 @@ static bool shellOp(const QStringList &sourceNames, const QStringList &destinati
     }
   }
 
+  if (silent) {
+    op.fFlags |= FOF_NO_UI;
+  }
+
   int res = ::SHFileOperationW(&op);
   if (res == 0) {
     return true;
@@ -253,6 +254,9 @@ bool shellDelete(const QStringList &fileNames, bool recycle, QWidget *dialog)
 
 namespace shell
 {
+
+static QString g_urlHandler;
+
 
 Result::Result(bool success, DWORD error, QString message, HANDLE process) :
   m_success(success), m_error(error), m_message(std::move(message)),
@@ -465,10 +469,82 @@ Result Open(const QString& path)
   return ShellExecuteWrapper(L"open", ws_path.c_str(), nullptr);
 }
 
+Result OpenCustomURL(const std::wstring& format, const std::wstring& url)
+{
+  log::debug("custom url handler: '{}'", format);
+
+  // arguments, the first one is the url, the next 98 are empty strings because
+  // FormatMessage() doesn't have a way of saying how many arguments are
+  // available in the array, so this avoids a crash if there's something like
+  // %2 in the format string
+  const std::size_t args_count = 99;
+  DWORD_PTR args[args_count];
+  args[0] = reinterpret_cast<DWORD_PTR>(url.c_str());
+
+  for (std::size_t i=1; i<args_count; ++i) {
+    args[i] = reinterpret_cast<DWORD_PTR>(L"");
+  }
+
+  wchar_t* output = nullptr;
+
+  // formatting
+  const auto n = ::FormatMessageW(
+    FORMAT_MESSAGE_ALLOCATE_BUFFER |
+    FORMAT_MESSAGE_ARGUMENT_ARRAY |
+    FORMAT_MESSAGE_FROM_STRING,
+    format.c_str(), 0, 0,
+    reinterpret_cast<LPWSTR>(&output), 0, reinterpret_cast<va_list*>(args));
+
+  if (n == 0) {
+    const auto e = GetLastError();
+
+    log::error("failed to format browser command '{}'", format);
+    log::error("{}", formatSystemMessage(e));
+    log::error("{}", QObject::tr(
+      "You have an invalid custom browser command in the settings."));
+
+    return Result::makeFailure(e);
+  }
+
+  const std::wstring cmd(output, n);
+  ::LocalFree(output);
+
+  log::debug("running '{}'", cmd);
+
+  // creating process
+  STARTUPINFO si = { .cb = sizeof(STARTUPINFO) };
+  PROCESS_INFORMATION pi = {};
+
+  const auto r = ::CreateProcessW(
+    nullptr, const_cast<wchar_t*>(cmd.c_str()),
+    nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+
+  if (r == 0) {
+    const auto e = GetLastError();
+    log::error("failed to run '{}'", cmd);
+    log::error("{}", formatSystemMessage(e));
+    log::error("{}", QObject::tr(
+      "You have an invalid custom browser command in the settings."));
+    return Result::makeFailure(e);
+  }
+
+  ::CloseHandle(pi.hProcess);
+  ::CloseHandle(pi.hThread);
+
+  return Result::makeSuccess();
+}
+
 Result Open(const QUrl& url)
 {
+  log::debug("opening url '{}'", url.toString());
+
   const auto ws_url = url.toString().toStdWString();
-  return ShellExecuteWrapper(L"open", ws_url.c_str(), nullptr);
+
+  if (g_urlHandler.isEmpty()) {
+    return ShellExecuteWrapper(L"open", ws_url.c_str(), nullptr);
+  } else {
+    return OpenCustomURL(g_urlHandler.toStdWString(), ws_url);
+  }
 }
 
 Result Execute(const QString& program, const QString& params)
@@ -477,6 +553,11 @@ Result Execute(const QString& program, const QString& params)
   const auto params_ws = params.toStdWString();
 
   return ShellExecuteWrapper(L"open", program_ws.c_str(), params_ws.c_str());
+}
+
+void SetUrlHandler(const QString& cmd)
+{
+  g_urlHandler = cmd;
 }
 
 std::wstring toUNC(const QFileInfo& path)
@@ -503,12 +584,48 @@ Result Delete(const QFileInfo& path)
 
 Result Rename(const QFileInfo& src, const QFileInfo& dest)
 {
+  return Rename(src, dest, true);
+}
+
+Result Rename(const QFileInfo& src, const QFileInfo& dest, bool copyAllowed)
+{
   const auto wsrc = toUNC(src);
   const auto wdest = toUNC(dest);
 
-  if (!::MoveFileEx(wsrc.c_str(), wdest.c_str(), MOVEFILE_COPY_ALLOWED)) {
+  DWORD flags = 0;
+
+  if (copyAllowed) {
+    flags |= MOVEFILE_COPY_ALLOWED;
+  }
+
+  if (!::MoveFileEx(wsrc.c_str(), wdest.c_str(), flags)) {
     const auto e = ::GetLastError();
     return Result::makeFailure(e);
+  }
+
+  return Result::makeSuccess();
+}
+
+Result CreateDirectories(const QDir& dir)
+{
+  const DWORD e = static_cast<DWORD>(
+    ::SHCreateDirectory(0, dir.path().toStdWString().c_str()));
+
+  if (e != ERROR_SUCCESS) {
+    return Result::makeFailure(
+      e, QString::fromStdWString(formatSystemMessage(e)));
+  }
+
+  return Result::makeSuccess();
+}
+
+Result DeleteDirectoryRecursive(const QDir& dir)
+{
+  if (!shellOp({dir.path()}, QStringList(), nullptr, FO_DELETE, true)) {
+    const auto e = GetLastError();
+
+    return Result::makeFailure(
+      e, QString::fromStdWString(formatSystemMessage(e)));
   }
 
   return Result::makeSuccess();
@@ -607,6 +724,33 @@ QString ToString(const SYSTEMTIME &time)
   GetDateFormatA(LOCALE_USER_DEFAULT, LOCALE_USE_CP_ACP, &time, nullptr, dateBuffer, size);
   GetTimeFormatA(LOCALE_USER_DEFAULT, LOCALE_USE_CP_ACP, &time, nullptr, timeBuffer, size);
   return QString::fromLocal8Bit(dateBuffer) + " " + QString::fromLocal8Bit(timeBuffer);
+}
+
+static int naturalCompareI(const QString& a, const QString& b)
+{
+  static QCollator c = []{
+    QCollator temp;
+    temp.setNumericMode(true);
+    temp.setCaseSensitivity(Qt::CaseInsensitive);
+    return temp;
+  }();
+
+  return c.compare(a, b);
+}
+
+int naturalCompare(const QString& a, const QString& b, Qt::CaseSensitivity cs)
+{
+  if (cs == Qt::CaseInsensitive) {
+    return naturalCompareI(a, b);
+  }
+
+  static QCollator c = []{
+    QCollator temp;
+    temp.setNumericMode(true);
+    return temp;
+  }();
+
+  return c.compare(a, b);
 }
 
 bool fixDirectoryName(QString &name)
@@ -894,10 +1038,11 @@ QString localizedSize(
   constexpr unsigned long long OneTB = 1024ull * 1024 * 1024 * 1024;
 
   auto makeNum = [&](int factor) {
-    const double n = bytes / std::pow(1024.0, factor);
+    const double n = static_cast<double>(bytes) / std::pow(1024.0, factor);
 
     // avoids rounding something like "1.999" to "2.00 KB"
-    const double truncated = static_cast<unsigned long long>(n * 100) / 100.0;
+    const double truncated =
+      static_cast<double>(static_cast<unsigned long long>(n * 100)) / 100.0;
 
     return QString().setNum(truncated, 'f', 2);
   };
@@ -974,14 +1119,24 @@ QDLLEXPORT void localizedByteSizeTests()
 }
 
 
-TimeThis::TimeThis(QString what)
-  : m_what(std::move(what)), m_start(Clock::now()), m_running(true)
+TimeThis::TimeThis(const QString& what)
+  : m_running(false)
 {
+  start(what);
 }
 
 TimeThis::~TimeThis()
 {
   stop();
+}
+
+void TimeThis::start(const QString& what)
+{
+  stop();
+
+  m_what = what;
+  m_start = Clock::now();
+  m_running = true;
 }
 
 void TimeThis::stop()

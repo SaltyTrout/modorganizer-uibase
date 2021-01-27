@@ -27,6 +27,7 @@ public:
 protected:
   bool filterAcceptsRow(int row, const QModelIndex& parent) const override;
   void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
+  bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 
 private:
   FilterWidget& m_filter;
@@ -51,6 +52,8 @@ public:
   };
 
   using predFun = std::function<bool (const QRegularExpression& what)>;
+  using sortFun = std::function<bool (const QModelIndex&, const QModelIndex&)>;
+
 
   FilterWidget();
 
@@ -69,17 +72,28 @@ public:
   void setUseSourceSort(bool b);
   bool useSourceSort() const;
 
+  void setSortPredicate(sortFun f);
+  const sortFun& sortPredicate() const;
+
   void setFilterColumn(int i);
   int filterColumn() const;
 
   void setFilteringEnabled(bool b);
   bool filteringEnabled() const;
 
-  FilterWidgetProxyModel* proxyModel();
+  void setFilteredBorder(bool b);
+  bool filteredBorder() const;
 
-  QModelIndex map(const QModelIndex& index);
+  FilterWidgetProxyModel* proxyModel();
+  QAbstractItemModel* sourceModel();
+
+  QModelIndex mapFromSource(const QModelIndex& index) const;
+  QModelIndex mapToSource(const QModelIndex& index) const;
+  QItemSelection mapSelectionFromSource(const QItemSelection& sel) const;
+  QItemSelection mapSelectionToSource(const QItemSelection& sel) const;
 
   bool matches(predFun pred) const;
+  bool matches(const QString& s) const;
 
 signals:
   void aboutToChange(const QString& oldFilter, const QString& newFilter);
@@ -100,8 +114,10 @@ private:
   bool m_useDelay;
   bool m_valid;
   bool m_useSourceSort;
+  sortFun m_lt;
   int m_filterColumn;
   bool m_filteringEnabled;
+  bool m_filteredBorder;
 
   void hookEdit();
   void unhookEdit();

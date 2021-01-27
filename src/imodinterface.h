@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef IMODINTERFACE_H
 #define IMODINTERFACE_H
 
+#include <memory>
 #include <utility>
 #include <set>
 
@@ -34,6 +35,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 namespace MOBase {
 
 class VersionInfo;
+class IFileTree;
 
 enum class EndorsedState {
   ENDORSED_FALSE,
@@ -169,6 +171,37 @@ public: // Meta-related information:
    */
   virtual EndorsedState endorsedState() const = 0;
 
+  /**
+   * @brief Retrieve a file tree corresponding to the underlying disk content
+   *     of this mod.
+   *
+   * The file tree should not be cached since it is already cached and updated when
+   * required.
+   *
+   * @return a file tree representing the content of this mod.
+   */
+  virtual std::shared_ptr<const MOBase::IFileTree> fileTree() const = 0;
+
+  /**
+   * @return true if this object represents the overwrite mod.
+   */
+  virtual bool isOverwrite() const = 0;
+
+  /**
+   * @return true if this object represents a backup.
+   */
+  virtual bool isBackup() const = 0;
+
+  /**
+   * @return true if this object represents a separator.
+   */
+  virtual bool isSeparator() const = 0;
+
+  /**
+   * @return true if this object represents a foreign mod.
+   */
+  virtual bool isForeign() const = 0;
+
 public: // Mutable operations:
 
   /**
@@ -229,22 +262,11 @@ public: // Mutable operations:
   virtual void setGameName(const QString &gameName) = 0;
 
   /**
-   * @brief set the name of this mod
+   * @brief Set a URL for this mod.
    *
-   * set the name of this mod. This will also update the name of the
-   * directory that contains this mod
-   *
-   * @param name new name of the mod
-   * @return true on success, false if the new name can't be used (i.e. because the new
-   *         directory name wouldn't be valid)
-   **/
-  virtual bool setName(const QString &name) = 0;
-
-  /**
-   * @brief delete the mod from the disc. This does not update the global ModInfo structure or indices
-   * @return true on success
+   * @param url The URL of this mod.
    */
-  virtual bool remove() = 0;
+  virtual void setUrl(const QString &url) = 0;
 
 public: // Plugin operations:
 

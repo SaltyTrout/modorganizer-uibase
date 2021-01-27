@@ -32,14 +32,46 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 namespace MOBase
 {
 
+QWidget* topLevelWindow()
+{
+  if (!qApp) {
+    return nullptr;
+  }
+
+  for (QWidget* w : qApp->topLevelWidgets()) {
+    if (dynamic_cast<QMainWindow*>(w)) {
+      return w;
+    }
+  }
+
+  return nullptr;
+}
+
+void criticalOnTop(const QString& message)
+{
+  QMessageBox mb(QMessageBox::Critical, "Mod Organizer", message);
+
+  mb.show();
+  mb.activateWindow();
+  mb.raise();
+  mb.exec();
+}
+
 void reportError(const QString &message)
 {
   log::error("{}", message);
+
   if (QApplication::topLevelWidgets().count() != 0) {
-    QMessageBox messageBox(QMessageBox::Warning, QObject::tr("Error"), message, QMessageBox::Ok);
-    messageBox.exec();
+    if (auto* mw=topLevelWindow()) {
+      QMessageBox::warning(mw, QObject::tr("Error"), message, QMessageBox::Ok);
+    } else {
+      criticalOnTop(message);
+    }
   } else {
-    ::MessageBoxW(nullptr, message.toStdWString().c_str(), QObject::tr("Error").toStdWString().c_str(), MB_ICONERROR | MB_OK);
+    ::MessageBoxW(
+      0, message.toStdWString().c_str(),
+      QObject::tr("Error").toStdWString().c_str(),
+      MB_ICONERROR | MB_OK);
   }
 }
 
@@ -58,7 +90,7 @@ TaskDialogButton::TaskDialogButton(QString t, QMessageBox::StandardButton b)
 TaskDialog::TaskDialog(QWidget* parent, QString title) :
   m_dialog(new QDialog(parent)), ui(new Ui::TaskDialog),
   m_title(std::move(title)), m_icon(QMessageBox::NoIcon),
-  m_result(QMessageBox::Cancel),
+  m_result(QMessageBox::Cancel), m_width(-1),
   m_rememberCheck(nullptr), m_rememberCombo(nullptr)
 {
   ui->setupUi(m_dialog.get());
@@ -109,6 +141,19 @@ TaskDialog& TaskDialog::remember(const QString& action, const QString& file)
   return *this;
 }
 
+void TaskDialog::addContent(QWidget* w)
+{
+  auto* ly = static_cast<QVBoxLayout*>(ui->contentPanel->layout());
+
+  // add before spacer
+  ly->insertWidget(ly->count() - 1, w);
+}
+
+void TaskDialog::setWidth(int w)
+{
+  m_width = w;
+}
+
 QMessageBox::StandardButton TaskDialog::exec()
 {
   const auto b = checkMemory();
@@ -122,8 +167,20 @@ QMessageBox::StandardButton TaskDialog::exec()
   setButtons();
   setDetails();
 
-  ui->topPanel->setMinimumWidth(400);
+  if (m_width >= 0) {
+    ui->topPanel->setMinimumWidth(m_width);
+  } else {
+    ui->topPanel->setMinimumWidth(400);
+  }
+
   m_dialog->adjustSize();
+
+  if (!m_dialog->parent()) {
+    // no parent, make sure it's shown on top
+    m_dialog->show();
+    m_dialog->activateWindow();
+    m_dialog->raise();
+  }
 
   if (m_dialog->exec() != QDialog::Accepted) {
     return QMessageBox::Cancel;
@@ -265,7 +322,9 @@ void TaskDialog::setWidgets()
 {
   ui->main->setText(m_main);
   setFontPercent(ui->main, 1.5);
+
   ui->content->setText(m_content);
+  ui->content->setVisible(!m_content.isEmpty());
 
   auto icon = standardIcon(m_icon);
 

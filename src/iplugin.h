@@ -26,29 +26,48 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include "versioninfo.h"
 #include "imoinfo.h"
 #include "pluginsetting.h"
+#include "pluginrequirements.h"
+#include <vector>
 #include <QString>
 #include <QObject>
 
 namespace MOBase {
 
-class IPlugin {
+class IPlugin
+{
+public:
+
+  // For easier access in child class:
+  using Requirements = PluginRequirementFactory;
+
 public:
   virtual ~IPlugin() {}
 
-  /** 
-   * @brief Initialize the plugin. This is called immediately after loading the plugin,
-   *     no other function is called before. Plugins will probably want to store the
-   *     organizer pointer. It is guaranteed to be valid as long as the plugin is loaded.
+  /**
+   * @brief Initialize the plugin.
    *
-   * @return false if the plugin could not be initialized, true otherwise. 
+   * Note that this function may never be called if no IOrganizer is available
+   * at that time, such as when creating the first instance in MO. For proxy
+   * plugins, init() is always called, but given a null IOrganizer.
+   *
+   * Plugins will probably want to store the organizer pointer. It is guaranteed
+   * to be valid as long as the plugin is loaded.
+   *
+   * These functions may be called before init():
+   *   - name()
+   *   - see IPluginGame for more
+   *
+   * @return false if the plugin could not be initialized, true otherwise.
    */
   virtual bool init(IOrganizer *organizer) = 0;
 
   /**
+   * this function may be called before init()
+   *
    * @return the internal name of this plugin (used for example in the settings menu).
    *
-   * @note Please ensure you use a name that will not change. Do NOT include a version number in the 
-   *     name. Do NOT use a localizable string (tr()) here. Settings for example are tied to this name, 
+   * @note Please ensure you use a name that will not change. Do NOT include a version number in the
+   *     name. Do NOT use a localizable string (tr()) here. Settings for example are tied to this name,
    *     if you rename your plugin you lose settings users made.
    */
   virtual QString name() const = 0;
@@ -56,13 +75,13 @@ public:
   /**
    * @return the localized name for this plugin.
    *
-   * @note Unlike name(), this method can (and should!) return a localized name for the plugin. 
+   * @note Unlike name(), this method can (and should!) return a localized name for the plugin.
    * @note This method returns name() by default.
    */
   virtual QString localizedName() const { return name(); }
 
   /**
-   * @brief Retrieve the master plugin of this plugin. 
+   * @brief Retrieve the name of the master plugin of this plugin.
    *
    * It is often easier to implement a functionality as multiple plugins in MO2, but ship the
    * plugins together, e.g. as a Python module or using `createFunctions()`. In this case, having
@@ -70,10 +89,19 @@ public:
    * linked and should also be displayed together in the UI. If MO2 ever implements automatic
    * updates for plugins, the `master()` plugin will also be used for this purpose.
    *
-   * @return the master plugin of this plugin, or a null pointer if this plugin does not have
+   * @return the name of the master plugin of this plugin, or an empty string if this plugin does not have
    *     a master.
    */
-  virtual IPlugin* master() const { return nullptr; }
+  virtual QString master() const { return ""; }
+
+  /**
+   * @brief Retrieve the requirements for the plugins.
+   *
+   * This method is called right after init().
+   *
+   * @return the requirements for this plugin.
+   */
+  virtual std::vector<std::shared_ptr<const IPluginRequirement>> requirements() const { return {}; }
 
   /**
    * @return the author of this plugin.
@@ -91,15 +119,7 @@ public:
   virtual VersionInfo version() const = 0;
 
   /**
-   * @brief Called to test if this plugin is active. Inactive plugins can still be configured
-   *      and report problems but otherwise have no effect.
-   *
-   * @return true if this plugin is active, false otherwise.
-   */
-  virtual bool isActive() const = 0;
-
-  /**
-   * @return the list of configurable settings for this plugin (in the user interface). The list may be 
+   * @return the list of configurable settings for this plugin (in the user interface). The list may be
    *     empty.
    *
    * @note Plugin can store "hidden" (from the user) settings using IOrganizer::persistent / IOrganizer::setPersistent.

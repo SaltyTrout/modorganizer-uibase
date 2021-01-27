@@ -22,10 +22,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef IMOINFO_H
 #define IMOINFO_H
 
-
-#include "versioninfo.h"
-#include "guessedvalue.h"
-#include "iprofile.h"
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -33,21 +29,34 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <Windows.h>
 #include <functional>
 
+#include "guessedvalue.h"
+#include "imodlist.h"
+#include "iprofile.h"
+#include "versioninfo.h"
+
 namespace MOBase {
 
 class IModInterface;
 class IModRepositoryBridge;
 class IDownloadManager;
 class IPluginList;
-class IModList;
+class IPlugin;
 class IPluginGame;
 
 /**
  * @brief Interface to class that provides information about the running session
  *        of Mod Organizer to be used by plugins
+ *
+ * When MO requires plugins but does not have a valid instance loaded (such as
+ * on first start in the instance creation dialog), init() will not be called at
+ * all, except for proxy plugins.
+ *
+ * In the case of proxy plugins, init() is called with a null IOrganizer.
  */
-class QDLLEXPORT IOrganizer: public QObject {
+class QDLLEXPORT IOrganizer: public QObject
+{
   Q_OBJECT
+
 public:
 
   /**
@@ -62,6 +71,10 @@ public:
 public:
 
   virtual ~IOrganizer() {}
+
+  // the directory for plugin data, typically plugins/data
+  //
+  static QString getPluginDataPath();
 
   /**
    * @return create a new nexus interface class
@@ -104,19 +117,12 @@ public:
   virtual VersionInfo appVersion() const = 0;
 
   /**
-   * @brief retrieve an interface to a mod by its name
-   * @param name name of the mod to query
-   * @return an interface to the mod or nullptr if there is no mod with the name
-   */
-  virtual IModInterface *getMod(const QString &name) const = 0;
-
-  /**
    * @brief create a new mod with the specified name
    * @param name name of the new mod
    * @return an interface that can be used to modify the mod. nullptr if the user canceled
    * @note a popup asking the user to merge, rename or replace the mod is displayed if the mod already exists.
    *       That has to happen on the main thread and MO2 will deadlock if it happens on any other.
-   *       If this needs to be called from another thread, use "getMod" to verify the mod-name is unused first
+   *       If this needs to be called from another thread, use IModList::getMod() to verify the mod-name is unused first
    */
   virtual IModInterface *createMod(GuessedValue<QString> &name) = 0;
 
@@ -128,21 +134,33 @@ public:
   virtual IPluginGame *getGame(const QString &gameName) const = 0;
 
   /**
-   * @brief remove a mod (from disc and from the ui)
-   * @param mod the mod to remove
-   * @return true on success, false on error
-   */
-  virtual bool removeMod(IModInterface *mod) = 0;
-
-  /**
    * @brief let the organizer know that a mod has changed
    * @param the mod that has changed
    */
   virtual void modDataChanged(IModInterface *mod) = 0;
 
   /**
-   * @brief retrieve the specified setting for a plugin
-   * @param pluginName name of the plugin for which to retrieve a setting. This should always be IPlugin::name() unless you have a really good reason
+   * @brief Check if a plugin is enabled.
+   *
+   * @param pluginName Plugin to check.
+   *
+   * @return true if the plugin is enabled, false otherwise.
+   */
+  virtual bool isPluginEnabled(IPlugin* plugin) const = 0;
+
+  /**
+   * @brief Check if a plugin is enabled.
+   *
+   * @param pluginName Name of the plugin to check.
+   *
+   * @return true if the plugin is enabled, false otherwise.
+   */
+  virtual bool isPluginEnabled(QString const& pluginName) const = 0;
+
+  /**
+   * @brief Retrieve the specified setting for a plugin.
+   *
+   * @param pluginName Name of the plugin for which to retrieve a setting. This should always be IPlugin::name() unless you have a really good reason
    *                   to access settings of another mod. You can not access settings for a plugin that isn't installed.
    * @param key identifier of the setting
    * @return the setting
@@ -308,6 +326,7 @@ public:
    * @brief blocks until the given process has completed
    *
    * @param handle     the process to wait for
+   * @param refresh    whether MO should refresh after the process completed
    * @param exitCode   the exit code of the process after it ended
    *
    * @return true if the process completed successfully
@@ -318,33 +337,23 @@ public:
    *       which case this will return false
    */
   virtual bool waitForApplication(
-      HANDLE handle, LPDWORD exitCode = nullptr) const = 0;
+      HANDLE handle, bool refresh = true, LPDWORD exitCode = nullptr) const = 0;
 
   /**
-   * @brief refresh the mod list
-   * @param saveChanges if true, the relevant profile information is saved first (enabled mods and the ordering)
+   * @brief Refresh the internal mods file structure from disk. This includes the mod list, the plugin
+   *     list, data tab and other smaller things like problems button (same as pressing F5).
+   *
+   * @note The main part of the refresh of the mods file strcuture, modlist and pluginlist is done
+   *     asynchronously, so you should not expect them to be up-to-date when this function returns.
+   *
+   * @param saveChanges If true, the relevant profile information is saved first (enabled mods and their order).
    */
-  virtual void refreshModList(bool saveChanges = true) = 0;
+  virtual void refresh(bool saveChanges = true) = 0;
 
   /**
    * @brief get the currently managed game info
    */
   virtual MOBase::IPluginGame const *managedGame() const = 0;
-
-  /**
-   * @brief Get the mod list, sorted by current profile priority
-   */
-  virtual QStringList modsSortedByProfilePriority() const = 0;
-
-  /**
-   * @brief Add a new callback to be called when a new mod is installed.
-   *
-   * Parameters of the callback:
-   *   - The name of the mod installed.
-   *
-   * @param func Function to called when a mod has been installed.
-   */
-  virtual bool onModInstalled(const std::function<void(const QString&)>& func) = 0;
 
   /**
    * @brief Add a new callback to be called when an application is about to be run.
@@ -381,6 +390,43 @@ public:
   virtual bool onUserInterfaceInitialized(std::function<void(QMainWindow*)> const& func) = 0;
 
   /**
+   * @brief Add a new callback to be called when a new profile is created.
+   *
+   * Parameters of the callback:
+   *   - The created profile (can be a temporary object, so it should not be stored).
+   *
+   * @param func Function to be called when a profile is created.
+   *
+   */
+  virtual bool onProfileCreated(std::function<void(IProfile*)> const& func) = 0;
+
+  /**
+   * @brief Add a new callback to be called when a profile is renamed.
+   *
+   * Parameters of the callback:
+   *   - The renamed profile.
+   *   - The old name of the profile.
+   *   - The new name of the profile.
+   *
+   * @param func Function to be called when a profile is renamed.
+   *
+   */
+  virtual bool onProfileRenamed(std::function<void(IProfile*, QString const&, QString const&)> const& func) = 0;
+
+  /**
+   * @brief Add a new callback to be called when a profile is removed.
+   *
+   * Parameters of the callback:
+   *   - The name of the removed profile.
+   *
+   * The function is called after the profile has been removed, so the profile is not accessible anymore.
+   *
+   * @param func Function to be called when a profile is removed.
+   *
+   */
+  virtual bool onProfileRemoved(std::function<void(QString const&)> const& func) = 0;
+
+  /**
    * @brief Add a new callback to be called when the current profile is changed.
    *
    * Parameters of the callback:
@@ -411,8 +457,51 @@ public:
    */
   virtual bool onPluginSettingChanged(std::function<void(QString const&, const QString& key, const QVariant&, const QVariant&)> const& func) = 0;
 
+  /**
+   * @brief Add a new callback to be called when a plugin is enabled.
+   *
+   * Parameters of the callback:
+   *   - The enabled plugin.
+   *
+   * @param func Function to be called when a plugin is enabled.
+   */
+  virtual bool onPluginEnabled(std::function<void(const IPlugin*)> const& func) = 0;
+
+  /**
+   * @brief Add a new callback to be called when the specified plugin is enabled.
+   *
+   * @param name Name of the plugin to watch.
+   * @param func Function to be called when a plugin is enabled.
+   */
+  virtual bool onPluginEnabled(const QString& pluginName, std::function<void()> const& func) = 0;
+
+  /**
+   * @brief Add a new callback to be called when a plugin is disabled.
+   *
+   * Parameters of the callback:
+   *   - The disabled plugin.
+   *
+   * @param func Function to be called when a plugin is disabled.
+   */
+  virtual bool onPluginDisabled(std::function<void(const IPlugin*)> const& func) = 0;
+
+  /**
+   * @brief Add a new callback to be called when the specified plugin is disabled.
+   *
+   * @param name Name of the plugin to watch.
+   * @param func Function to be called when a plugin is disabled.
+   */
+  virtual bool onPluginDisabled(const QString& pluginName, std::function<void()> const& func) = 0;
+
 };
 
 } // namespace MOBase
+
+
+namespace MOBase::details
+{
+  // called from MO
+  QDLLEXPORT void setPluginDataPath(const QString& s);
+}
 
 #endif // IMOINFO_H

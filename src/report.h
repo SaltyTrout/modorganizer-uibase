@@ -35,11 +35,18 @@ namespace MOBase {
 
 class ExpanderWidget;
 
-/**
- * Convenience function displaying an error message box. This function uses WinAPI if no Qt Window is available
- * yet or QMessageBox otherwise.
- */
+// Convenience function displaying an error message box. This function uses
+// WinAPI if no Qt Window is available yet or QMessageBox otherwise.
+//
 QDLLEXPORT void reportError(const QString &message);
+
+// shows a critical message box that's raised to the top of the zorder, useful
+// for messages without a main window, which sometimes makes them pop up behind
+// all other windows
+//
+// the dialog is not topmost, it's just raised once when shown
+//
+QDLLEXPORT void criticalOnTop(const QString& message);
 
 
 struct QDLLEXPORT TaskDialogButton
@@ -66,6 +73,9 @@ public:
   TaskDialog& button(TaskDialogButton b);
   TaskDialog& remember(const QString& action, const QString& file={});
 
+  void addContent(QWidget* w);
+  void setWidth(int w);
+
   QMessageBox::StandardButton exec();
 
 private:
@@ -76,6 +86,7 @@ private:
   std::vector<TaskDialogButton> m_buttons;
   QMessageBox::StandardButton m_result;
   std::unique_ptr<ExpanderWidget> m_expander;
+  int m_width;
 
   QString m_rememberAction, m_rememberFile;
   QCheckBox* m_rememberCheck;

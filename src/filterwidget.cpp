@@ -71,11 +71,26 @@ bool FilterWidgetProxyModel::columnMatches(
 void FilterWidgetProxyModel::sort(int column, Qt::SortOrder order)
 {
   if (m_filter.useSourceSort()) {
+    // without this, the proxy seems to sometimes ignore the sorting done below,
+    // no idea why
+    QSortFilterProxyModel::sort(-1, order);
+
     sourceModel()->sort(column, order);
   } else {
     QSortFilterProxyModel::sort(column, order);
   }
 }
+
+bool FilterWidgetProxyModel::lessThan(
+  const QModelIndex& left, const QModelIndex& right) const
+{
+  if (auto lt=m_filter.sortPredicate()) {
+    return lt(left, right);
+  } else {
+    return QSortFilterProxyModel::lessThan(left, right);
+  }
+}
+
 
 
 static FilterWidget::Options s_options;
@@ -83,8 +98,8 @@ static FilterWidget::Options s_options;
 FilterWidget::FilterWidget() :
   m_edit(nullptr), m_list(nullptr), m_proxy(nullptr),
   m_eventFilter(nullptr), m_clear(nullptr), m_timer(nullptr),
-  m_valid(true), m_useSourceSort(false), m_filterColumn(-1),
-  m_filteringEnabled(true)
+  m_useDelay(false), m_valid(true), m_useSourceSort(false), m_filterColumn(-1),
+  m_filteringEnabled(true), m_filteredBorder(true)
 {
   m_timer = new QTimer(this);
   m_timer->setSingleShot(true);
@@ -171,6 +186,16 @@ bool FilterWidget::useSourceSort() const
   return m_useSourceSort;
 }
 
+void FilterWidget::setSortPredicate(sortFun f)
+{
+  m_lt = f;
+}
+
+const FilterWidget::sortFun& FilterWidget::sortPredicate() const
+{
+  return m_lt;
+}
+
 void FilterWidget::setFilterColumn(int i)
 {
   m_filterColumn = i;
@@ -191,18 +216,69 @@ bool FilterWidget::filteringEnabled() const
   return m_filteringEnabled;
 }
 
+void FilterWidget::setFilteredBorder(bool b)
+{
+  m_filteredBorder = b;
+}
+
+bool FilterWidget::filteredBorder() const
+{
+  return m_filteredBorder;
+}
+
 FilterWidgetProxyModel* FilterWidget::proxyModel()
 {
   return m_proxy;
 }
 
-QModelIndex FilterWidget::map(const QModelIndex& index)
+QAbstractItemModel* FilterWidget::sourceModel()
+{
+  if (m_proxy) {
+    return m_proxy->sourceModel();
+  } else if (m_list) {
+    return m_list->model();
+  } else {
+    return nullptr;
+  }
+}
+
+QModelIndex FilterWidget::mapFromSource(const QModelIndex& index) const
+{
+  if (m_proxy) {
+    return m_proxy->mapFromSource(index);
+  } else {
+    log::error("FilterWidget::mapFromSource() called, but proxy isn't set up");
+    return index;
+  }
+}
+
+QModelIndex FilterWidget::mapToSource(const QModelIndex& index) const
 {
   if (m_proxy) {
     return m_proxy->mapToSource(index);
   } else {
-    log::error("FilterWidget::map() called, but proxy isn't set up");
+    log::error("FilterWidget::mapToSource() called, but proxy isn't set up");
     return index;
+  }
+}
+
+QItemSelection FilterWidget::mapSelectionFromSource(const QItemSelection& sel) const
+{
+  if (m_proxy) {
+    return m_proxy->mapSelectionFromSource(sel);
+  } else {
+    log::error("FilterWidget::mapToSource() called, but proxy isn't set up");
+    return sel;
+  }
+}
+
+QItemSelection FilterWidget::mapSelectionToSource(const QItemSelection& sel) const
+{
+  if (m_proxy) {
+    return m_proxy->mapSelectionToSource(sel);
+  } else {
+    log::error("FilterWidget::mapToSource() called, but proxy isn't set up");
+    return sel;
   }
 }
 
@@ -299,6 +375,13 @@ bool FilterWidget::matches(predFun pred) const
   return false;
 }
 
+bool FilterWidget::matches(const QString& s) const
+{
+  return matches([&](const QRegularExpression& re) {
+    return re.match(s).hasMatch();
+  });
+}
+
 void FilterWidget::hookEdit()
 {
   m_eventFilter = new EventFilter(m_edit, [&](auto* w, auto* e) {
@@ -313,6 +396,7 @@ void FilterWidget::hookEdit()
   });
 
   m_edit->installEventFilter(m_eventFilter);
+  QObject::connect(m_edit, &QLineEdit::textChanged, [&]{ onTextChanged(); });
 }
 
 void FilterWidget::unhookEdit()
@@ -353,6 +437,26 @@ void FilterWidget::unhookList()
   m_shortcuts.clear();
 }
 
+// walks up the parents of `w`, returns true if one of them is a QDialog
+//
+bool topLevelIsDialog(QWidget* w)
+{
+  if (!w) {
+    return false;
+  }
+
+  auto* p = w->parentWidget();
+  while (p) {
+    if (dynamic_cast<QDialog*>(p)) {
+      return true;
+    }
+
+    p = p->parentWidget();
+  }
+
+  return false;
+}
+
 void FilterWidget::setShortcuts()
 {
   auto activate = [this] {
@@ -380,14 +484,26 @@ void FilterWidget::setShortcuts()
   };
 
 
+  // don't hook the escape key for reset when the filter is in a dialog, the
+  // standard behaviour is to close the dialog
+  const bool inDialog = topLevelIsDialog(
+    m_list ? static_cast<QWidget*>(m_list) : m_edit);
+
+
   if (m_list) {
     hookActivate(m_list);
-    hookReset(m_list);
+
+    if (!inDialog) {
+      hookReset(m_list);
+    }
   }
 
   if (m_edit) {
     hookActivate(m_edit);
-    hookReset(m_edit);
+
+    if (!inDialog) {
+      hookReset(m_edit);
+    }
   }
 }
 
@@ -420,7 +536,6 @@ void FilterWidget::createClear()
   m_clear->hide();
 
   QObject::connect(m_clear, &QToolButton::clicked, [&]{ clear(); });
-  QObject::connect(m_edit, &QLineEdit::textChanged, [&]{ onTextChanged(); });
 
   repositionClearButton();
 }
@@ -447,7 +562,10 @@ void FilterWidget::set()
   }
 
   if (m_list) {
-    setStyleProperty(m_list, "filtered", !m_text.isEmpty());
+    if (m_filteredBorder) {
+      setStyleProperty(m_list, "filtered", !m_text.isEmpty());
+    }
+
     scrollToSelection();
   }
 
