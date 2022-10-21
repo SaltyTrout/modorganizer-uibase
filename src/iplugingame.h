@@ -314,6 +314,11 @@ public:
    */
   virtual QString getLauncherName() const = 0;
 
+  /**
+   * @brief Get a URL for the support page for the game
+   */
+  virtual QString getSupportURL() const { return ""; }
+
 protected:
 
   virtual std::map<std::type_index, std::any> featureList() const = 0;
